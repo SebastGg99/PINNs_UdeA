@@ -2,10 +2,6 @@ import deepxde as dde
 from deepxde.backend import tf
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import animation
-from matplotlib.colors import Normalize
-# from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 # Clase para geometría
 class Geometry():
@@ -13,87 +9,36 @@ class Geometry():
     self.mode = mode # Tipo de geometría
 
   def geometry_domain(self, params):
+    
+    timedomain = dde.geometry.TimeDomain(params[0], params[1])
+
     if self.mode == "barra":
       # Se define un dominio espacio-temporal para la barra
-      timedomain = dde.geometry.TimeDomain(params[0], params[1])
       geom = dde.geometry.Interval(params[2], params[3])
-      geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
     if self.mode == "placa":
       # Se define un dominio espacio-temporal para la placa
-      timedomain = dde.geometry.TimeDomain(params[0], params[1])
       geom = dde.geometry.Rectangle(params[2], params[3])
-      geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
-    if self.mode == "disipador":
-      timedomain = dde.geometry.TimeDomain(params[0], params[1])
-
-      # Parámetros geométricos
-      base_width = params[2]
-      base_height = params[3]
-      base_depth = params[4]
-      fin_length = params[5]
-      fin_thickness = params[6]
-      fin_depth = base_depth
-      num_fins = params[7]
-      fin_spacing = base_height / (num_fins + 1)
-
-      # Crear geometría espacial 3D
-      base = dde.geometry.Cuboid([0.0, 0.0, 0.0], [base_width, base_height, base_depth])
-      geom = base
-      for i in range(num_fins):
-          y_pos = fin_spacing * (i + 1) - fin_thickness / 2
-          fin = dde.geometry.Cuboid(
-              [base_width, y_pos, 0.0],
-              [base_width + fin_length, y_pos + fin_thickness, fin_depth]
-          )
-          geom = dde.geometry.CSGUnion(geom, fin)
-
-      # Geometría espacio-temporal
-      geomtime = dde.geometry.GeometryXTime(geom, timedomain)
-
+    geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
     return geom, timedomain, geomtime
 
-
+# Clase para condiciones iniciales
 class IC_BC():
     def __init__(self, geomtime):
         self.geomtime = geomtime
 
-    def problem_conditions(self, value, f, mode="1d-2d"):
-        
-        if mode == "1d-2d":
+    def problem_conditions(self, value, f):
+      
+      ic = dde.icbc.IC(self.geomtime, f, lambda _, on_initial: on_initial)
 
-          ic = dde.icbc.IC(self.geomtime,
-                          f,
-                          lambda _, on_initial: on_initial)
-
-
-          bc = dde.icbc.DirichletBC(self.geomtime, 
-                                    lambda x: value, 
-                                    lambda _, on_boundary:on_boundary)
-          
-        if mode == "3d":
-          
-          ic = dde.icbc.IC(self.geomtime, lambda x: value[0], lambda _, on_initial: on_initial)
-          
-          bc_base = dde.icbc.DirichletBC(self.geomtime, lambda x: value[1], f)  # u=1
-
-          # BC Robin corregido: Convección en aletas
-          h_over_k = 1.0  # Coeficiente convectivo
-
-          bc_convection = dde.icbc.RobinBC(
-              self.geomtime,
-              lambda x, outputs: -h_over_k * outputs,  # -α * u
-              lambda x, on_boundary: on_boundary and (x[0] >= value[3])
-          )
-
-          bc = [bc_base, bc_convection]
-
-        return ic, bc
+      bc = dde.icbc.DirichletBC(self.geomtime, lambda x: value, lambda _, on_boundary:on_boundary)
+      
+      return ic, bc
 
 
-# Clase para datos sintéticos
+# Clase para generar datos sintéticos
 class loadData():
   def __init__(self, pde, geomtime, ic, bc):
     self.pde = pde
@@ -101,32 +46,18 @@ class loadData():
     self.ic = ic
     self.bc = bc
 
-  def get_data(self, ndom, nbound, ninit, ntest, mode = "3d"):
+  def get_data(self, ndom, nbound, ninit, ntest):
     
-    if mode == "1d-2d":
-    
-      data = dde.data.TimePDE(
-          self.geomtime,
-          self.pde,
-          [self.bc, self.ic],
-          num_domain=ndom,
-          num_boundary=nbound,
-          num_initial=ninit,
-          num_test=ntest,
-        )
-      
-    if mode == "3d":
-      data = dde.data.TimePDE(
-          self.geomtime,
-          self.pde,
-          self.bc + [self.ic],
-          num_domain=ndom,
-          num_boundary=nbound,
-          num_initial=ninit,
-          num_test=ntest,
-          # train_distribution="Hammersley"
+    data = dde.data.TimePDE(
+      self.geomtime,
+      self.pde,
+      [self.bc, self.ic],
+      num_domain=ndom,
+      num_boundary=nbound,
+      num_initial=ninit,
+      num_test=ntest
       )
-
+      
     return data
 
 
@@ -140,7 +71,7 @@ class PINN():
     self.activation = activation
     self.mmm = mmm
 
-    self.net = dde.nn.FNN([self.n_input] + 3 * [self.n_hidden] + [self.n_output], self.activation, self.mmm)
+    self.net = dde.nn.FNN([self.n_input] + [self.n_hidden] + [self.n_output], self.activation, self.mmm)
 
   def train_model(self, data, steps):
     model = dde.Model(data, self.net)
@@ -152,6 +83,7 @@ class PINN():
     losshistory, train_state = model.train()
 
     return model, losshistory, train_state
+
 
 # Clase para graficación
 class Ploter():
@@ -182,8 +114,6 @@ class Ploter():
       ax2.set_zlabel('u(x, t)')
       ax2.set_title('u(x, t) PINN')
       fig.colorbar(surf, ax=ax2, shrink=0.6, aspect=12)
-
-
       plt.tight_layout()
       plt.show()
 
@@ -209,7 +139,6 @@ class Ploter():
       ax3d.set_xlabel("x")
       ax3d.set_ylabel("y")
       ax3d.set_zlabel("u")
-      # ax3d.set_title(f"Superficie u(x, y, t = {ts[k]:.2f})")
       ax3d.set_title(f"Superficie u(x, y, t={unique_times[k]:.3f})")
       plt.tight_layout()
       plt.show()
@@ -226,7 +155,6 @@ class Ploter():
       ax1.set_ylabel('x')
       ax1.set_title('Heatmap: u(x, t) PINN')
       fig.colorbar(pcm, ax=ax1, label='u(x, t)')
-
       plt.tight_layout()
       plt.show()
 
@@ -241,7 +169,7 @@ class Ploter():
       # Mapa de calor final
       plt.figure(figsize=(6, 4))
       plt.imshow(
-          U_final.T,  # Transpuesto para (x horizontal, y vertical)
+          U_final.T,
           origin="lower",
           extent=[0, 1, 0, 1],
           cmap="jet",
@@ -252,9 +180,9 @@ class Ploter():
       plt.xlabel("x")
       plt.ylabel("y")
       plt.title(f"Solución PINN 2D en t = {unique_times[k]:.3f}")
-      #plt.title(f"Solución PINN 2D en t = epa")
       plt.tight_layout()
       plt.show()
+
 
 # Clase para construir los meshgrid
 class Makegrid():
@@ -291,7 +219,7 @@ class Makegrid():
       ]).T
 
       # Obtener predicción de DeepXDE
-      u_pred = model.predict(XT)[:, 0]  # devuelve array (nx*ny*nt, 1)
+      u_pred = model.predict(XT)[:, 0]
       U_pred = u_pred.reshape(n, n, n)
 
       return X, Y, T, U_pred, k
